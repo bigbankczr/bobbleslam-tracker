@@ -74,6 +74,9 @@ if __name__ == "__main__":
     for label, count in occurrences.most_common():
         print(f"  {label:<14} {count:>5} occurrences  {postsContaining[label]:>5} posts")
 
+    for label, count in sorted(occurrences.most_common()):
+        print(f'"{label}",')
+
     print(f"\n{len(shapes)} distinct shapes, top 20:\n")
     for signature, count in shapes.most_common(20):
         print(f"  {count:>5}  {', '.join(signature)}")
