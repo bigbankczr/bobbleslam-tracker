@@ -1,6 +1,7 @@
 import re
 from html import unescape
 from collections import Counter
+from itertools import groupby
 
 from shapes import loadPosts, labelsIn, fieldsIn
 
@@ -264,6 +265,7 @@ def parsePost(post):
         "league": fields.get("League"),
         "variant": variant,
         "roles": roles,
+        "inScope": bool(roles & IN_SCOPE) or not roles,
         "bobbleType": fields.get("Bobble Type"),
         "themes": themes,
         "park": fields.get("Park"),
@@ -293,11 +295,36 @@ def parseAll(posts):
             row = dict(parsed)
             row["name"] = name
             row["honoreeCount"] = len(parsed["names"])
-            row["inScope"] = bool(parsed["roles"] & IN_SCOPE) or not parsed["roles"]
             rows.append(row)
     return rows
 
+def keyCollisions(rows):
+    """
+    check for unique candidate keys across parsed rows. counts if sharing (name, date) and (id, name). prints collisions
+    :param rows: row dicts from parseAll()
+    :return: (tuple) counters holding keys occurring more than once
+    """
+    nameDate = Counter()
+    idName = Counter()
 
+    for row in rows:
+        nameDate[(row["name"], row["date"])] += 1
+        idName[(row["id"], row["name"])] += 1
+
+    nameDate = Counter({key: count for key, count in nameDate.items() if count > 1})
+    idName = Counter({key: count for key, count in idName.items() if count > 1})
+
+    print(f"{len(nameDate):,} (name, date) keys on more than one row")
+    print(f"{len(idName):,} (id, name) keys on more than one row")
+
+    collided = sorted((row for row in rows if (row["name"], row["date"]) in nameDate), key=lambda row: (row["name"], row["date"]),)
+    for key, group in groupby(collided, key=lambda row: (row["name"], row["date"])):
+        name, date = key
+        print(f"\n {name}  {date}")
+        for row in group:
+            print(f"      {row['id']}   {row['variant']!r}   {row['link']}")
+
+    return nameDate, idName
 
 if __name__ == "__main__":
     posts = loadPosts()
