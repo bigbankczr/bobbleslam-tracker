@@ -40,7 +40,8 @@ def seasonPath(season):
 
 def fetchSeason(season):
     """
-    download one season's mlb player list from statsapi and save raw response. seasons already on disk are skipped, except the current.
+    download one season's mlb player list from statsapi and save raw response. seasons already on disk are skipped,
+    except the current.
     :param season: season year
     :return: none
     :raises requests.HTTPError: if stats api returns a 4/500 error
@@ -80,20 +81,67 @@ def loadSeason(season):
 def nameKey(name):
     """
     normalize name for exact matching. applied to site and statsapi names. strips accents, normalizes apostrophes,
-    periods to spaces, collapses whitespace, and lowercases. suffixes are kept so sr's never match jr's
+    periods and hyphens to spaces, merges initials (a j -> aj), collapses whitespace, and lowercases. suffixes are kept
+    so sr's never match jr's
     :param name: raw name string, from a title or statsapi fullName
     :return: (str) comparison key
     """
     name = unicodedata.normalize('NFKD', name)
     name = "".join(c for c in name if not unicodedata.combining(c))
     name = name.translate(APOSTROPHES)
-    name = name.replace(".", " ")
-    name = " ".join(name.split())
-    return name.lower()
+    name = name.replace(".", " ").replace("-", " ")
+    words, inRun = [], False
+    for word in name.split():
+        if len(word) == 1 and word.isalpha():
+            if inRun:
+                words[-1] += word
+            else:
+                words.append(word)
+            inRun = True
+        else:
+            words.append(word)
+            inRun = False
+    return " ".join(words).lower()
+
+# name level remaps for names nameKey can't reconcile: nicknames, name changes, typos, missing suffixes. applied in
+# matchBobbles before lookup
+
+BULLPENBOBBLES_TO_MLB = {nameKey(site): nameKey(mlb) for site, mlb in [
+    # nickname vs legal name
+    ("Kike Hernandez", "Enrique Hernández"),
+    ("Nicholas Castellanos", "Nick Castellanos"),
+    ("Peter Fairbanks", "Pete Fairbanks"),
+    ("Zach Britton", "Zack Britton"),
+    ("Tony Plush", "Nyjer Morgan"),
+    ("Mike Gonzalez", "Michael Gonzalez"),
+
+    # name changes
+    ("Fausto Carmona", "Roberto Hernández"),
+    ("Dee Gordon", "Dee Strange-Gordon"),
+    ("Christian Encarnacion", "Christian Encarnacion-Strand"),
+
+    # site typos
+    ("Garrett Anderson", "Garret Anderson"),
+    ("Jared Weaver", "Jered Weaver"),
+    ("Hong-Chih Kuo", "Hung-Chih Kuo"),
+
+    # missing suffix. only safe when bare name was never in mlb 99+. never: Vlad not yet: McCullers
+    ("Luis Robert", "Luis Robert Jr."),
+    ("Jerry Hairston", "Jerry Hairston Jr."),
+    ("Rickie Weeks", "Rickie Weeks Jr."),
+    ("Albert Almora", "Albert Almora Jr."),
+    ("Lourdes Gurriel", "Lourdes Gurriel Jr."),
+    ("Lance McCullers", "Lance McCullers Jr."),
+
+    # title parse oddities
+    ("Dansby", "Dansby Swanson"),
+    ("Francisco Lindor WWE", "Francisco Lindor"),
+]}
 
 def buildIndex(seasons):
     """
-    per-season lookup from name key to the players holding that name. values are lists since players can share a name. stored as plain dicts.
+    per-season lookup from name key to the players holding that name. values are lists since players can share a name.
+    stored as plain dicts.
     :param seasons: season years from seasonsNeeded()
     :return: (dict) {season: {nameKey: [{"id", "fullName"}, ...]}}
     """
@@ -105,6 +153,19 @@ def buildIndex(seasons):
             byKey[key].append({"id": player["id"], "fullName": player["fullName"]})
         index[season] = dict(byKey)
     return index
+
+def unsafeRemaps(index):
+    """
+    finds remaps whose source name is a real mlb player in some season. remapping would steal rows.
+    :param index: season index from buildIndex()
+    :return: (list) (source, seasons) pairs, empty if all remaps are safe
+    """
+    unsafe = []
+    for source in BULLPENBOBBLES_TO_MLB:
+        seasons = [season for season, byKey in index.items() if source in byKey]
+        if seasons:
+            unsafe.append((source, seasons))
+    return unsafe
 
 ROLES = ("player", "alumni", "other", "untyped")
 
@@ -125,20 +186,25 @@ def roleLabel(bobbleType):
 
 def matchBobbles(conn, index):
     """
-    look up every in-scope honoree in the season index by name key. name only, no tie-breaking
+    look up every in-scope honoree in the season index by name key, after applying BULLPENBOBBLES_TO_MLB. name only, no
+    tie-breaking
     :param conn: open connection from openDatabase()
     :param index: season index from buildIndex()
     :return: (list) one result dict per in-scope honoree, status matched/ambiguous/none, with candidates for matching
+              and whether the name was remapped
     """
     rows = conn.execute("""SELECT h.postId, h.ordinal, h.name, p.date, p.team, p.bobbleType, p.link
                            FROM honorees h
                            JOIN posts p ON p.id = h.postId
-                           WHERE inScope = 1
+                           WHERE p.inScope = 1
                            ORDER BY p.date, h.postId, h.ordinal""").fetchall()
     results = []
     for row in rows:
         season = int(row["date"][:4])
-        candidates = index[season].get(nameKey(row["name"]), [])
+        key = nameKey(row["name"])
+        remapped = key in BULLPENBOBBLES_TO_MLB
+        key = BULLPENBOBBLES_TO_MLB.get(key, key)
+        candidates = index[season].get(key, [])
         if not candidates:
             status = "none"
         elif len(candidates) == 1:
@@ -152,6 +218,7 @@ def matchBobbles(conn, index):
                         "team": row["team"],
                         "link": row["link"],
                         "role": roleLabel(row["bobbleType"]),
+                        "remapped": remapped,
                         "status": status,
                         "candidates": candidates})
 
@@ -164,6 +231,10 @@ if __name__ == "__main__":
     assert nameKey("Guerrero Jr., Vladimir ") == nameKey("Guerrero Jr., Vladimir")
     assert nameKey("Eric Young Sr.") != nameKey("Eric Young Jr.")
     assert nameKey("J.D. Martinez") == nameKey("J. D. Martinez")
+    assert nameKey("JD Martinez") == nameKey("J.D. Martinez")
+    assert nameKey("CC Sabathia") == nameKey("C.C. Sabathia")
+    assert nameKey("AJ Pierzynski") == nameKey("A. J. Pierzynski")
+    assert nameKey("Hyun-Jin Ryu") == nameKey("Hyun Jin Ryu")
 
     conn = openDatabase()
     seasons = seasonsNeeded(conn)
@@ -171,6 +242,9 @@ if __name__ == "__main__":
         fetchSeason(season)
 
     index = buildIndex(seasons)
+    unsafe = unsafeRemaps(index)
+    if unsafe:
+        raise ValueError(f"remaps whose source is a real player: {unsafe}")
     results = matchBobbles(conn, index)
     conn.close()
 
@@ -192,4 +266,13 @@ if __name__ == "__main__":
         print(f"   {r['date']}   {r['name']!r:<28}   {r['team']}")
         print(f"      {r['link']}")
 
+    deadRemaps = [r for r in results if r["remapped"] and r["status"] == "none"]
+    print(f"\n{len(deadRemaps)} remapped rows still unmatched")
+    for r in deadRemaps:
+        print(f"   {r['date']}   {r['name']!r:<28}   {r['team']}")
 
+    activeAlumni = [r for r in results if r["role"] == "alumni" and r["status"] != "none"]
+    print(f"\n{len(activeAlumni)} alumni active that season")
+    for r in activeAlumni:
+        print(f"   {r['date']}   {r['name']!r:<28}   {r['team']}")
+        print(f"      {r['link']}")
