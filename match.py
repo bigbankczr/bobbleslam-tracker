@@ -1,0 +1,195 @@
+import json
+import os
+import time
+import unicodedata
+from collections import Counter, defaultdict
+from datetime import date
+
+import requests
+
+from load import openDatabase
+from parser import normalizeBobbleType
+
+
+URL = "https://statsapi.mlb.com/api/v1/sports/1/players"
+HEADERS = {"User-Agent": "bobble-research/1.0"}
+TIMEOUT = 30
+DIRECTORY = "raw/statsapi"
+APOSTROPHES = str.maketrans({"\u2019": "'"})
+
+
+def seasonsNeeded(conn):
+    """
+    list every season that has at least one post, from the giveaway dates in the database
+    :param conn: open connection from openDatabase()
+    :return: (list) season years as ints
+    """
+    rows = conn.execute("""SELECT DISTINCT substr(date, 1, 4) AS season
+                            FROM posts
+                            ORDER BY season""")
+    return [int(row["season"]) for row in rows]
+
+
+def seasonPath(season):
+    """
+    path to one season's player list
+    :param season: season year
+    :return: (str) file path under DIRECTORY
+    """
+    return os.path.join(DIRECTORY, f"baseball_players_{season}.json")
+
+def fetchSeason(season):
+    """
+    download one season's mlb player list from statsapi and save raw response. seasons already on disk are skipped, except the current.
+    :param season: season year
+    :return: none
+    :raises requests.HTTPError: if stats api returns a 4/500 error
+    """
+    path = seasonPath(season)
+    if os.path.exists(path) and season != date.today().year:
+        return
+
+    response = requests.get(URL, params={"season": season}, headers=HEADERS, timeout=TIMEOUT)
+    response.raise_for_status()
+
+    os.makedirs(DIRECTORY, exist_ok=True)
+    temp = path + ".temp"
+    with open(temp, "w", encoding="utf-8") as f:
+        f.write(response.text)
+    os.replace(temp, path)
+
+    print(f"{season}: {len(response.json()['people']):,} players")
+    time.sleep(1)
+
+def loadSeason(season):
+    """
+    read one season file and return its players
+    :param season: season year
+    :return: (list) player dicts from statsapi's "people" array
+    :raises FileNotFoundError: if season was never fetched
+            json.JSONDecodeError: if the file is truncated
+    """
+    path = seasonPath(season)
+    with open(path, encoding="utf-8") as f:
+        try:
+            return json.load(f)["people"]
+        except json.decoder.JSONDecodeError as e:
+            e.add_note(f"while loading {path}")
+            raise
+
+def nameKey(name):
+    """
+    normalize name for exact matching. applied to site and statsapi names. strips accents, normalizes apostrophes,
+    periods to spaces, collapses whitespace, and lowercases. suffixes are kept so sr's never match jr's
+    :param name: raw name string, from a title or statsapi fullName
+    :return: (str) comparison key
+    """
+    name = unicodedata.normalize('NFKD', name)
+    name = "".join(c for c in name if not unicodedata.combining(c))
+    name = name.translate(APOSTROPHES)
+    name = name.replace(".", " ")
+    name = " ".join(name.split())
+    return name.lower()
+
+def buildIndex(seasons):
+    """
+    per-season lookup from name key to the players holding that name. values are lists since players can share a name. stored as plain dicts.
+    :param seasons: season years from seasonsNeeded()
+    :return: (dict) {season: {nameKey: [{"id", "fullName"}, ...]}}
+    """
+    index = {}
+    for season in seasons:
+        byKey = defaultdict(list)
+        for player in loadSeason(season):
+            key = nameKey(player["fullName"])
+            byKey[key].append({"id": player["id"], "fullName": player["fullName"]})
+        index[season] = dict(byKey)
+    return index
+
+ROLES = ("player", "alumni", "other", "untyped")
+
+def roleLabel(bobbleType):
+    """
+    reduce a raw bobble type to one label
+    :param bobbleType: raw bobble type string from posts or None
+    :return: (str) one of ROLES
+    """
+    roles = normalizeBobbleType(bobbleType)
+    if "player" in roles:
+        return "player"
+    if "alumni" in roles:
+        return "alumni"
+    if not roles:
+        return "untyped"
+    return "other"
+
+def matchBobbles(conn, index):
+    """
+    look up every in-scope honoree in the season index by name key. name only, no tie-breaking
+    :param conn: open connection from openDatabase()
+    :param index: season index from buildIndex()
+    :return: (list) one result dict per in-scope honoree, status matched/ambiguous/none, with candidates for matching
+    """
+    rows = conn.execute("""SELECT h.postId, h.ordinal, h.name, p.date, p.team, p.bobbleType, p.link
+                           FROM honorees h
+                           JOIN posts p ON p.id = h.postId
+                           WHERE inScope = 1
+                           ORDER BY p.date, h.postId, h.ordinal""").fetchall()
+    results = []
+    for row in rows:
+        season = int(row["date"][:4])
+        candidates = index[season].get(nameKey(row["name"]), [])
+        if not candidates:
+            status = "none"
+        elif len(candidates) == 1:
+            status = "matched"
+        else:
+            status = "ambiguous"
+        results.append({"postId": row["postId"],
+                        "ordinal": row["ordinal"],
+                        "name": row["name"],
+                        "date": row["date"],
+                        "team": row["team"],
+                        "link": row["link"],
+                        "role": roleLabel(row["bobbleType"]),
+                        "status": status,
+                        "candidates": candidates})
+
+    return results
+
+if __name__ == "__main__":
+    assert nameKey("Ronald Acuña Jr.") == nameKey("Ronald Acuna Jr.")
+    assert nameKey("Travis d\u2019Arnaud") == nameKey("Travis d'Arnaud")
+    assert nameKey("Yandy\xa0Díaz") == nameKey("Yandy Díaz")
+    assert nameKey("Guerrero Jr., Vladimir ") == nameKey("Guerrero Jr., Vladimir")
+    assert nameKey("Eric Young Sr.") != nameKey("Eric Young Jr.")
+    assert nameKey("J.D. Martinez") == nameKey("J. D. Martinez")
+
+    conn = openDatabase()
+    seasons = seasonsNeeded(conn)
+    for season in seasons:
+        fetchSeason(season)
+
+    index = buildIndex(seasons)
+    results = matchBobbles(conn, index)
+    conn.close()
+
+    print(f"\n{len(results):,} in-scope bobbles\n")
+    counts = Counter((r["status"], r["role"]) for r in results)
+    print(f"   {'':<10}" + "".join(f"{role:>9}" for role in ROLES))
+    for status in ("matched", "ambiguous", "none"):
+        print(f"   {status:<10}" + "".join(f"{counts[(status, role)]:>9,}" for role in ROLES))
+
+    ambiguous = [r for r in results if r["status"] == "ambiguous"]
+    print(f"\n{len(ambiguous)} ambiguous")
+    for r in ambiguous:
+        print(f"   {r['date']}   {r['name']!r:<28}   {r['team']}")
+        print(f"       {[(c['id'], c['fullName']) for c in r['candidates']]}")
+
+    queue = [r for r in results if r["status"] == "none" and r["role"] == "player"]
+    print(f"\n{len(queue)} unmatched player rows")
+    for r in queue:
+        print(f"   {r['date']}   {r['name']!r:<28}   {r['team']}")
+        print(f"      {r['link']}")
+
+
