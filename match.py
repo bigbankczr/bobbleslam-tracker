@@ -179,6 +179,24 @@ def unsafeRemaps(index):
             unsafe.append((source, seasons))
     return unsafe
 
+def prepareIndex(conn):
+    """
+    season index ready to match against. fetches missing seasons, builds index, raises on an unsafe remap
+    :param conn: open connection from openDatabase()
+    :return: (dict) season index from buildIndex()
+    :raises ValueError: if a remap's source name belongs to a real mlb player
+    :raises requests.HTTPError: if stats api returns a 4/500 error
+    """
+    seasons = seasonsNeeded(conn)
+    for season in seasons:
+        fetchSeason(season)
+
+    index = buildIndex(seasons)
+    unsafe = unsafeRemaps(index)
+    if unsafe:
+        raise ValueError(f"remaps whose source is a real player: {unsafe}")
+    return index
+
 ROLES = ("player", "alumni", "other", "untyped")
 STATUSES = ("matched", "resolved", "ambiguous", "none")
 
@@ -263,14 +281,7 @@ if __name__ == "__main__":
     assert nameKey("Hyun-Jin Ryu") == nameKey("Hyun Jin Ryu")
 
     conn = openDatabase()
-    seasons = seasonsNeeded(conn)
-    for season in seasons:
-        fetchSeason(season)
-
-    index = buildIndex(seasons)
-    unsafe = unsafeRemaps(index)
-    if unsafe:
-        raise ValueError(f"remaps whose source is a real player: {unsafe}")
+    index = prepareIndex(conn)
     results = matchBobbles(conn, index)
     conn.close()
 
