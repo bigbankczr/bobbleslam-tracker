@@ -138,6 +138,18 @@ BULLPENBOBBLES_TO_MLB = {nameKey(site): nameKey(mlb) for site, mlb in [
     ("Francisco Lindor WWE", "Francisco Lindor"),
 ]}
 
+AMBIGUOUS_RESOLUTIONS = {(33066, 0): 408314, # José Reyes the Mets SS, not Jose Reyes the Cubs C
+                         (33895, 0): 455759, # Chris Young the DBacks CF, not the Padres P
+                         (35250, 0): 455759, # Chris Young the DBacks CF, not the Mets P
+                         (35251, 0): 455759, # Chris Young the DBacks CF, not the Mets P
+                         (37229, 0): 622110, # Matt Duffy the Rays 3B, not the Astros 3B
+                         (37923, 0): 608070, # José Ramirez the Indians 3B, not the Braves P
+                         (40568, 0): 669257, # Will Smith the Dodgers C, not the Astros P
+                         (41269, 0): 669257, # Will Smith the Dodgers C, not the Rangers P
+                         (41869, 0): 669257, # Will Smith the Dodgers C, not the Royals P
+                         (57069, 0): 571970  # Max Muncy the Dodgers 3B, not the As 3B
+}
+
 def buildIndex(seasons):
     """
     per-season lookup from name key to the players holding that name. values are lists since players can share a name.
@@ -168,6 +180,7 @@ def unsafeRemaps(index):
     return unsafe
 
 ROLES = ("player", "alumni", "other", "untyped")
+STATUSES = ("matched", "resolved", "ambiguous", "none")
 
 def roleLabel(bobbleType):
     """
@@ -186,12 +199,14 @@ def roleLabel(bobbleType):
 
 def matchBobbles(conn, index):
     """
-    look up every in-scope honoree in the season index by name key, after applying BULLPENBOBBLES_TO_MLB. name only, no
-    tie-breaking
+    look up every in-scope honoree in the season index by name key, after applying BULLPENBOBBLES_TO_MLB. two or more
+    rows decided by AMBIGUOUS_RESOLUTIONS when row has an entry
     :param conn: open connection from openDatabase()
     :param index: season index from buildIndex()
-    :return: (list) one result dict per in-scope honoree, status matched/ambiguous/none, with candidates for matching
-              and whether the name was remapped
+    :return: (list) one result dict per in-scope honoree. status matched/resolved/ambiguous/none, mlbId is id and
+    mlbName is statsapi spelling for matched and resolved rows, None otherwise, with candidates for matching and whether
+    the name was remapped
+    :raises ValueError: if a resolution's id isn't among that row's candidates
     """
     rows = conn.execute("""SELECT h.postId, h.ordinal, h.name, p.date, p.team, p.bobbleType, p.link
                            FROM honorees h
@@ -205,12 +220,21 @@ def matchBobbles(conn, index):
         remapped = key in BULLPENBOBBLES_TO_MLB
         key = BULLPENBOBBLES_TO_MLB.get(key, key)
         candidates = index[season].get(key, [])
+        resolution = AMBIGUOUS_RESOLUTIONS.get((row["postId"], row["ordinal"]))
+
         if not candidates:
-            status = "none"
+            status, mlbId, mlbName = "none", None, None
         elif len(candidates) == 1:
-            status = "matched"
+            status, mlbId, mlbName = "matched", candidates[0]["id"], candidates[0]["fullName"]
+        elif resolution is not None:
+            byId = {candidate["id"]: candidate for candidate in candidates}
+            if resolution not in byId:
+                raise ValueError(f"resolution {resolution} for ({row['postId']}, {row['ordinal']})"
+                                 f"{row['name']!r} is not a candidate: {sorted(byId)}")
+            status, mlbId, mlbName = "resolved", resolution, byId[resolution]["fullName"]
         else:
-            status = "ambiguous"
+            status, mlbId, mlbName = "ambiguous", None, None
+
         results.append({"postId": row["postId"],
                         "ordinal": row["ordinal"],
                         "name": row["name"],
@@ -220,6 +244,8 @@ def matchBobbles(conn, index):
                         "role": roleLabel(row["bobbleType"]),
                         "remapped": remapped,
                         "status": status,
+                        "mlbId": mlbId,
+                        "mlbName": mlbName,
                         "candidates": candidates})
 
     return results
@@ -251,13 +277,13 @@ if __name__ == "__main__":
     print(f"\n{len(results):,} in-scope bobbles\n")
     counts = Counter((r["status"], r["role"]) for r in results)
     print(f"   {'':<10}" + "".join(f"{role:>9}" for role in ROLES))
-    for status in ("matched", "ambiguous", "none"):
+    for status in STATUSES:
         print(f"   {status:<10}" + "".join(f"{counts[(status, role)]:>9,}" for role in ROLES))
 
     ambiguous = [r for r in results if r["status"] == "ambiguous"]
     print(f"\n{len(ambiguous)} ambiguous")
     for r in ambiguous:
-        print(f"   {r['date']}   {r['name']!r:<28}   {r['team']}")
+        print(f"   {r['date']}   {r['name']!r:<28}   {r['team']}   {r['postId']}, {r['ordinal']}")
         print(f"       {[(c['id'], c['fullName']) for c in r['candidates']]}")
 
     queue = [r for r in results if r["status"] == "none" and r["role"] == "player"]
@@ -270,6 +296,12 @@ if __name__ == "__main__":
     print(f"\n{len(deadRemaps)} remapped rows still unmatched")
     for r in deadRemaps:
         print(f"   {r['date']}   {r['name']!r:<28}   {r['team']}")
+
+    resolved = {(r["postId"], r["ordinal"]) for r in results if r["status"] == "resolved"}
+    deadResolutions = set(AMBIGUOUS_RESOLUTIONS) - resolved
+    print(f"\n{len(deadResolutions)} resolutions that matched no ambiguous row")
+    for key in sorted(deadResolutions):
+        print(f"   {key}   ->   {AMBIGUOUS_RESOLUTIONS[key]}")
 
     activeAlumni = [r for r in results if r["role"] == "alumni" and r["status"] != "none"]
     print(f"\n{len(activeAlumni)} alumni active that season")
