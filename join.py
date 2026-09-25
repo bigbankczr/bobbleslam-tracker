@@ -478,18 +478,41 @@ def homeRunsIn(feed, mlbId):
 
     return rows
 
-if __name__ == "__main__":
-    conn = openDatabase()
-    seasons = playerSeasons(conn)
-    print(f"{len(seasons):,} player-seasons")
+def gameFromSchedule(game):
+    """
+    stored fields of a played game from a schedule file
+    :param game: a schedule game dict
+    :return: (dict)
+    """
+    return {"gamePk": game["gamePk"], "date": game["officialDate"], "gameType": game["gameType"],
+            "gameNumber": game["gameNumber"], "doubleHeader": game["doubleHeader"],
+            "homeTeamId": game["teams"]["home"]["team"]["id"], "awayTeamId": game["teams"]["away"]["team"]["id"]}
 
+def gameFromLog(line):
+    """
+    stored fields of a game from a player's game-log
+    :param line: a player's line for a given game from loadGameLog()
+    :return: (dict) same keys as gameFromSchedule()
+    """
+    us, them = line["team"]["id"], line["opponent"]["id"]
+    home, away = (us, them) if line["isHome"] else (them, us)
+    return {"gamePk": line["game"]["gamePk"], "date": line["date"], "gameType": line["gameType"],
+            "gameNumber": line["game"]["gameNumber"], "doubleHeader": None,
+            "homeTeamId": home, "awayTeamId": away}
+
+def joinAll(conn):
+    """
+    the whole join. fetches what's missing, classifies all giveaways and player-nights, extracts homers.
+    :param conn: open connection from openDatabase()
+    :return: (dict)
+    :raises ValueError: on a bad hand decision, an unknown game state/quantity, or a home run with no game
+            requests.RequestException: if a fetch fails
+    """
+    seasons = playerSeasons(conn)
     years = sorted({season for _, season in seasons})
     for year in years:
         fetchTeams(year)
-    print(f"{len(years)} team lists")
-
     teamIds = giveawayTeams(conn, buildTeamIndex(years))
-    print(f"{len(teamIds):,} (team, season) pairs")
 
     rows = giveaways(conn)
     unknown = set(HANDOUT_DECISIONS) - {row["id"] for row in rows}
@@ -498,11 +521,6 @@ if __name__ == "__main__":
     badValues = {postId: value for postId, value in HANDOUT_DECISIONS.items() if value not in ("atGame", "notAtGame")}
     if badValues:
         raise ValueError(f"handout decisions must be atGame or notAtGame: {badValues}")
-    posts = list({row["id"]: row for row in rows}.values())
-    nights = sorted({(post["team"], post["date"]) for post in posts})
-    print(f"{len(posts):,} giveaway posts, {len(nights):,} nights")
-
-    conn.close()
 
     schedules = sorted({(teamId, season) for (_, season), teamId in teamIds.items()})
     fetched = 0
@@ -532,58 +550,44 @@ if __name__ == "__main__":
     markers = seasonMarkers(scheduleIndex)
     today = date.today().isoformat()
 
-    nightKind = {}
-    for team, day in nights:
-        key = (teamIds[(team, int(day[:4]))], int(day[:4]))
-        nightKind[(team, day)] = classifyGiveaway(scheduleIndex[key].get(day, []), day, today, markers[key])
-
-    outcomes, byOutcome = Counter(), defaultdict(list)
-    for post in posts:
-        how = HANDOUT_DECISIONS.get(post["id"], handout(post["quantity"]))
-        kind = "package" if how == "notAtGame" else nightKind[(post["team"], post["date"])][0]
-        outcomes[kind] += 1
-        byOutcome[kind].append(post)
-    unclear = sum(1 for post in posts if HANDOUT_DECISIONS.get(post["id"], handout(post["quantity"])) == "unclear")
-
-    print(f"\n{len(posts):,} giveaway posts")
-    for kind, count in outcomes.most_common():
-        print(f"   {kind:>14}: {count:>6,}")
-    print(f"   ({unclear:,} unclear handouts: review only if a homer)")
-    for kind in ("noGame", "rainout"):
-        print(f"\n{kind}")
-        for post in byOutcome[kind]:
-            print(f"   {post['date']}   {post['team']}   {post['quantity']!r}")
+    posts = {}
+    for row in rows:
+        if row["id"] in posts:
+            continue
+        season = int(row["date"][:4])
+        key = (teamIds[(row["team"], season)], season)
+        nightKind, played = classifyGiveaway(scheduleIndex[key].get(row["date"], []), row["date"], today, markers[key])
+        how = HANDOUT_DECISIONS.get(row["id"], handout(row["quantity"]))
+        posts[row["id"]] = {"id": row["id"], "team": row["team"], "date": row["date"], "quantity": row["quantity"],
+                            "teamId": key[0], "nightKind": nightKind, "played": played, "handout": how,
+                            "kind": "package" if how == "notAtGame" else nightKind,
+                            "giveawayGame": (played[0]["gamePk"] if nightKind == "single" and how != "notAtGame"
+                                             else None)}
+    for row in rows:
+        resolved = DOUBLEHEADER_GIVEAWAYS.get((row["mlbId"], row["date"]))
+        if resolved and posts[row["id"]]["nightKind"] == "doubleheader":
+            posts[row["id"]]["giveawayGame"] = resolved
 
     eligible = defaultdict(lambda: {"teams": set(), "unclear": True, "kinds": set(), "name": None})
     for row in rows:
-        kind = nightKind[(row["team"], row["date"])][0]
-        how = HANDOUT_DECISIONS.get(row["id"], handout(row["quantity"]))
-        if how == "notAtGame" or kind not in ("single", "doubleheader"):
+        post = posts[row["id"]]
+        if post["handout"] == "notAtGame" or post["nightKind"] not in ("single", "doubleheader"):
             continue
         night = eligible[(row["mlbId"], row["date"])]
-        night["teams"].add(teamIds[(row["team"], int(row["date"][:4]))])
-        night["unclear"] = night["unclear"] and how == "unclear"
-        night["kinds"].add(kind)
+        night["teams"].add(post["teamId"])
+        night["unclear"] = night["unclear"] and post["handout"] == "unclear"
+        night["kinds"].add(post["nightKind"])
         night["name"] = row["fullName"]
+    eligible = dict(eligible)
 
     logs, results = {}, {}
     for (mlbId, day), night in eligible.items():
         season = int(day[:4])
         if (mlbId, season) not in logs:
             logs[(mlbId, season)] = loadGameLog(mlbId, season)
-        results[(mlbId, day)] = classifyPlayerNight(logs[(mlbId, season)].get(day,[]), night["teams"])
+        results[(mlbId, day)] = classifyPlayerNight(logs[(mlbId, season)].get(day, []), night["teams"])
 
-    appeared = sum(1 for result in results.values() if result["appeared"])
     homerNights = [key for key, result in results.items() if result["homeRuns"]]
-    print(f"\n{len(results):,} eligible player-nights   {appeared:,} appeared   {len(results) - appeared:,} DNP")
-    print(f"{len(homerNights)} homer nights, {sum(results[key]['homeRuns'] for key in homerNights)} home runs")
-    print("\nhomers need review")
-    for key in sorted(homerNights, key=lambda key: key[1]):
-        night = eligible[key]
-        if ("doubleheader" in night["kinds"] and key not in DOUBLEHEADER_GIVEAWAYS) or night["unclear"]:
-            print(f"   {key[1]}   {night['name']}   HR {results[key]['homeRuns']}   "
-                  f"{'doubleheader ' if 'doubleheader' in night['kinds'] else ''}{'unclear' if night['unclear'] else ''}")
-
     feedGames = sorted({gamePk for key in homerNights for gamePk in results[key]["games"]})
     fetched = 0
     for gamePk in feedGames:
@@ -594,6 +598,12 @@ if __name__ == "__main__":
             e.add_note(f"while fetching feed {gamePk}")
             raise
     print(f"\n{len(feedGames)} feeds   {fetched} fetched")
+
+    for (mlbId, day), gamePk in DOUBLEHEADER_GIVEAWAYS.items():
+        if (mlbId, day) not in results:
+            raise ValueError(f"doubleheader giveaway for {mlbId} {day} matches no eligible player-night")
+        if gamePk not in results[(mlbId, day)]["games"]:
+            raise ValueError(f"doubleheader giveaway {gamePk} for {mlbId} {day} is not one of his games")
 
     homeRuns, unresolved = [], []
     for mlbId, day in homerNights:
@@ -608,10 +618,77 @@ if __name__ == "__main__":
             for row in homeRunsIn(loadFeed(gamePk), mlbId):
                 homeRuns.append({**row, "date": day, "name": eligible[(mlbId, day)]["name"]})
 
-    for (mlbId, day), gamePk in DOUBLEHEADER_GIVEAWAYS.items():
-        if (mlbId, day) not in results:
-            raise ValueError(f"doubleheader giveaway for {mlbId} {day} matches no eligible player-night")
-        if gamePk not in results[(mlbId, day)]["games"]:
-            raise ValueError(f"doubleheader giveaway {gamePk} for {mlbId} {day} is not one of his games")
+    games, appearances = {}, {}
+    for post in posts.values():
+        for game in post["played"]:
+            games[game["gamePk"]] = gameFromSchedule(game)
+    for mlbId, day in results:
+        for line in logs[(mlbId, int(day[:4]))].get(day, []):
+            gamePk = line["game"]["gamePk"]
+            games.setdefault(gamePk, gameFromLog(line))
+            appearance = appearances.setdefault((mlbId, gamePk), {"mlbId": mlbId, "gamePk": gamePk,
+                                                                 "teamId": line["team"]["id"], "homeRuns": 0})
+            if line["group"] == "hitting":
+                appearance["homeRuns"] += line["stat"].get("homeRuns", 0)
 
-    print(f"{len(homeRuns)} home run rows   {len(unresolved)} doubleheaders unresolved")
+    missing = {row["gamePk"] for row in homeRuns} - set(games)
+    if missing:
+        raise ValueError(f"home runs in games not stored: {sorted(missing)}")
+
+    return{"posts": list(posts.values()), "eligible": eligible, "results": results, "homeRuns": homeRuns,
+            "unresolved": unresolved, "games": list(games.values()), "appearances": list(appearances.values())}
+
+
+def printReport(joined):
+    """
+    print the stage report from joinAll()'s result
+    :param joined: from joinAll()
+    :return: none
+    """
+    posts, eligible, results, homeRuns = joined["posts"], joined["eligible"], joined["results"], joined["homeRuns"]
+
+    print(f"\n{len(posts):,} giveaway posts")
+    for kind, count in Counter(post["kind"] for post in posts).most_common():
+        print(f"   {kind:>14}: {count:>6,}")
+    print(f"   ({sum(1 for post in posts if post['handout'] == 'unclear'):,} unclear handouts: review only if a homer)")
+    for kind in ("noGame", "rainout", "preseason", "afterSeason"):
+        print(f"\n{kind}")
+        for post in posts:
+            if post["kind"] == kind:
+                print(f"   {post['date']}   {post['team']}   {post['quantity']!r}")
+
+    appeared = sum(1 for result in results.values() if result["appeared"])
+    homerNights = [key for key, result in results.items() if result["homeRuns"]]
+    print(f"\n{len(results):,} eligible player-nights   {appeared:,} appeared   {len(results) - appeared:,} DNP")
+    print(f"{len(homerNights)} homer nights, {sum(results[key]['homeRuns'] for key in homerNights)} home runs")
+
+    print("\ndifferent team")
+    for (mlbId, day), result in sorted(results.items(), key=lambda item: item[0][1]):
+        if result["differentTeam"]:
+            print(f"   {day}   {eligible[(mlbId, day)]['name']}   HR {result['homeRuns']}")
+
+    print("\nhomers need review")
+    for key in sorted(homerNights, key=lambda key: key[1]):
+        night = eligible[key]
+        if ("doubleheader" in night["kinds"] and key not in DOUBLEHEADER_GIVEAWAYS) or night["unclear"]:
+            print(f"   {key[1]}   {night['name']}   HR {results[key]['homeRuns']}   "
+                  f"{'doubleheader ' if 'doubleheader' in night['kinds'] else ''}{'unclear' if night['unclear'] else ''}")
+
+    print(f"\n{len(homeRuns)} home run rows   {len(joined['unresolved'])} doubleheaders unresolved")
+    print(f"{len(joined['games']):,} games   {len(joined['appearances']):,} appearances")
+
+    for label, test in (("grand slam", lambda row: row["rbi"] == 4),
+                        ("walk-off", lambda row: row["walkOff"]),
+                        ("pinch-hit", lambda row: row["pinchHit"]),
+                        ("leadoff, game", lambda row: row["leadoffGame"]),
+                        ("first pitch", lambda row: row["pitches"] == 1)):
+        hits = [row for row in homeRuns if test(row)]
+        print(f"\n{label}: {len(hits)}")
+        for row in sorted(hits, key=lambda row: row["date"]):
+            print(f"   {row['date']}   {row['name']}   inning {row['inning']}   off {row['pitcherName']}")
+
+if __name__ == "__main__":
+    conn = openDatabase()
+    joined = joinAll(conn)
+    conn.close()
+    printReport(joined)
