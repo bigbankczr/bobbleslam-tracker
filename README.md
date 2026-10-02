@@ -58,3 +58,5 @@ Pipeline complete, zero hand edits needed as the database rebuilds from raw file
 
 ### Data Sources
 Giveaway records compiled from BullpenBobbles.com. Baseball data from the MLB Stats API.
+
+***ALL RESULTS AS OF SEPT 26 2026***
