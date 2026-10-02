@@ -59,4 +59,4 @@ Pipeline complete, zero hand edits needed as the database rebuilds from raw file
 ### Data Sources
 Giveaway records compiled from BullpenBobbles.com. Baseball data from the MLB Stats API.
 
-***ALL RESULTS AS OF SEPT 26 2026***
+***ALL RESULTS AS OF SEPT 26 2026. A fresh scrape includes any posts added since then, so counts may differ slightly. Neither the site snapshot nor the database is currently committed. The first build fetches about 2900 StatsAPI files with a 1-second delay between requests , so expect roughly an hour. Later runs use the cache created in `raw/statsapi`***
