@@ -7,20 +7,25 @@ def createTables(conn):
     :param conn: open connection to sqlite3 database
     :return: none
     """
-    conn.executescript(""" 
-                       CREATE TABLE IF NOT EXISTS players ( id INTEGER PRIMARY KEY,
-                                                                fullName TEXT NOT NULL);
-                       CREATE TABLE IF NOT EXISTS honoreeMatches ( postId INTEGER NOT NULL,
-                                                                   ordinal INTEGER NOT NULL,
-                                                                   mlbId INTEGER,
-                                                                   status TEXT NOT NULL,
-                                                                   remapped INTEGER NOT NULL,
-                                                                   PRIMARY KEY (postId, ordinal),
-                           FOREIGN KEY (postId, ordinal) REFERENCES honorees(postId, ordinal),
-                           FOREIGN KEY (mlbId) REFERENCES players(id),
-                           CHECK (remapped IN (0,1)),
-                           CHECK (status IN ('matched', 'resolved', 'ambiguous', 'none')),
-                           CHECK ((mlbId IS NULL) = (status IN ('ambiguous', 'none'))));""")
+    conn.executescript("""CREATE TABLE IF NOT EXISTS players
+                          (
+    id       INTEGER PRIMARY KEY,
+    fullName TEXT NOT NULL
+                          );
+CREATE TABLE IF NOT EXISTS honoreeMatches
+(
+    postId   INTEGER NOT NULL,
+    ordinal  INTEGER NOT NULL,
+    mlbId    INTEGER,
+    status   TEXT    NOT NULL,
+    remapped INTEGER NOT NULL,
+    PRIMARY KEY (postId, ordinal),
+    FOREIGN KEY (postId, ordinal) REFERENCES honorees (postId, ordinal),
+    FOREIGN KEY (mlbId) REFERENCES players (id),
+    CHECK (remapped IN (0, 1)),
+    CHECK (status IN ('matched', 'resolved', 'ambiguous', 'none')),
+    CHECK ((mlbId IS NULL) = (status IN ('ambiguous', 'none')))
+);""")
 
 def playersIn(results):
     """
@@ -39,9 +44,9 @@ def insertPlayers(conn, players):
     :param players: {mlbId: fullName} from playersIn()
     :return: none
     """
-    conn.executemany(""" INSERT INTO players (id, fullName) 
-                         VALUES (?, ?) 
-                         ON CONFLICT (id) DO UPDATE SET fullName = excluded.fullName""", players.items())
+    conn.executemany("""INSERT INTO players (id, fullName)
+                        VALUES (?, ?)
+                        ON CONFLICT (id) DO UPDATE SET fullName = excluded.fullName""", players.items())
 
 def insertMatches(conn, results):
     """
@@ -52,8 +57,8 @@ def insertMatches(conn, results):
     """
     conn.execute("DELETE FROM honoreeMatches")
     rows = [(r["postId"], r["ordinal"], r["mlbId"], r["status"], r["remapped"]) for r in results]
-    conn.executemany(""" INSERT INTO honoreeMatches (postId, ordinal, mlbId, status, remapped) 
-                     VALUES (?, ?, ?, ?, ?)""", rows)
+    conn.executemany("""INSERT INTO honoreeMatches (postId, ordinal, mlbId, status, remapped)
+                        VALUES (?, ?, ?, ?, ?)""", rows)
 
 def storeAll(conn, results):
     """

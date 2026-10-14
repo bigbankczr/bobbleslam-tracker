@@ -12,43 +12,47 @@ def createTables(conn):
     :param conn: open connection to sqlite3 database
     :return: none
     """
-    conn.executescript("""
-                       CREATE TABLE IF NOT EXISTS posts (
-                                                            id INTEGER PRIMARY KEY,
-                                                            date TEXT NOT NULL,
-                                                            modified TEXT NOT NULL,
-                                                            link TEXT NOT NULL,
-                                                            team TEXT NOT NULL,
-                                                            teamField TEXT,
-                                                            league TEXT,
-                                                            park TEXT,
-                                                            attendance TEXT,
-                                                            quantity TEXT,
-                                                            sponsor TEXT,
-                                                            position TEXT,
-                                                            number TEXT,
-                                                            variant TEXT,
-                                                            bobbleType TEXT,
-                                                            inScope INTEGER NOT NULL CHECK (inScope IN (0,1)),
-                                                            batting INTEGER NOT NULL CHECK (batting IN (0,1)),
-                                                            pitching INTEGER NOT NULL CHECK (pitching IN (0,1)),
-                                                            tags TEXT,
-                                                            categories TEXT,
-                                                            fields TEXT NOT NULL,
-                                                            verifiedByHand INTEGER NOT NULL DEFAULT 0 CHECK 
-                                                                (verifiedByHand IN (0,1)));
-                       CREATE TABLE IF NOT EXISTS honorees (
-                                                               postId INTEGER NOT NULL REFERENCES posts(id),
-                                                               ordinal INTEGER NOT NULL,
-                                                               name TEXT NOT NULL,
-                                                               verifiedByHand INTEGER NOT NULL DEFAULT 0 CHECK 
-                                                                   (verifiedByHand IN (0,1)),
-                                                               PRIMARY KEY (postId, ordinal));
-                       CREATE TABLE IF NOT EXISTS themes (
-                                                             postId INTEGER NOT NULL REFERENCES posts(id),
-                                                             theme TEXT NOT NULL,
-                                                             PRIMARY KEY (postId, theme)
-                           );
+    conn.executescript("""CREATE TABLE IF NOT EXISTS posts
+                          (
+    id             INTEGER PRIMARY KEY,
+    date           TEXT    NOT NULL,
+    modified       TEXT    NOT NULL,
+    link           TEXT    NOT NULL,
+    team           TEXT    NOT NULL,
+    teamField      TEXT,
+    league         TEXT,
+    park           TEXT,
+    attendance     TEXT,
+    quantity       TEXT,
+    sponsor        TEXT,
+    position       TEXT,
+    number         TEXT,
+    variant        TEXT,
+    bobbleType     TEXT,
+    inScope        INTEGER NOT NULL CHECK (inScope IN (0, 1)),
+    batting        INTEGER NOT NULL CHECK (batting IN (0, 1)),
+    pitching       INTEGER NOT NULL CHECK (pitching IN (0, 1)),
+    tags           TEXT,
+    categories     TEXT,
+    fields         TEXT    NOT NULL,
+    verifiedByHand INTEGER NOT NULL DEFAULT 0 CHECK
+        (verifiedByHand IN (0, 1))
+                          );
+CREATE TABLE IF NOT EXISTS honorees
+(
+    postId         INTEGER NOT NULL REFERENCES posts (id),
+    ordinal        INTEGER NOT NULL,
+    name           TEXT    NOT NULL,
+    verifiedByHand INTEGER NOT NULL DEFAULT 0 CHECK
+        (verifiedByHand IN (0, 1)),
+    PRIMARY KEY (postId, ordinal)
+);
+CREATE TABLE IF NOT EXISTS themes
+(
+    postId INTEGER NOT NULL REFERENCES posts (id),
+    theme  TEXT    NOT NULL,
+    PRIMARY KEY (postId, theme)
+);
                        """)
 
 def openDatabase(path=DATABASE):
@@ -78,34 +82,34 @@ def insertPost(conn, parsed):
     values["categories"] = toJson(parsed["categories"])
     values["fields"] = toJson(parsed["fields"])
 
-    conn.execute("""
-                 INSERT INTO posts (id,date,modified, link, team, teamField, league, park, attendance, quantity, sponsor,
-                                    position, number, variant, bobbleType, inScope, batting, pitching, tags, categories, 
-                                    fields)
-                 VALUES (:id, :date, :modified, :link, :team, :teamField, :league, :park, :attendance, :quantity, 
-                         :sponsor, :position, :number, :variant, :bobbleType, :inScope, :batting, :pitching, :tags, 
-                         :categories, :fields)
-                 ON CONFLICT (id) DO UPDATE SET
-                                                date = excluded.date,
-                                                modified = excluded.modified,
-                                                link = excluded.link,
-                                                team = excluded.team,
-                                                teamField = excluded.teamField,
-                                                league = excluded.league,
-                                                park = excluded.park,
-                                                attendance = excluded.attendance,
-                                                quantity = excluded.quantity,
-                                                sponsor = excluded.sponsor,
-                                                position = excluded.position,
-                                                number = excluded.number,
-                                                variant = excluded.variant,
-                                                bobbleType = excluded.bobbleType,
-                                                inScope = excluded.inScope,
-                                                batting = excluded.batting,
-                                                pitching = excluded.pitching,
-                                                tags = excluded.tags,
-                                                categories = excluded.categories,
-                                                fields = excluded.fields WHERE posts.verifiedByHand = 0""", values)
+    conn.execute(
+        """INSERT INTO posts (id, date, modified, link, team, teamField, league, park, attendance, quantity, sponsor,
+                   position, number, variant, bobbleType, inScope, batting, pitching, tags, categories,
+                   fields)
+VALUES (:id, :date, :modified, :link, :team, :teamField, :league, :park, :attendance, :quantity,
+        :sponsor, :position, :number, :variant, :bobbleType, :inScope, :batting, :pitching, :tags,
+        :categories, :fields)
+ON CONFLICT (id) DO UPDATE SET date       = excluded.date,
+                               modified   = excluded.modified,
+                               link       = excluded.link,
+                               team       = excluded.team,
+                               teamField  = excluded.teamField,
+                               league     = excluded.league,
+                               park       = excluded.park,
+                               attendance = excluded.attendance,
+                               quantity   = excluded.quantity,
+                               sponsor    = excluded.sponsor,
+                               position   = excluded.position,
+                               number     = excluded.number,
+                               variant    = excluded.variant,
+                               bobbleType = excluded.bobbleType,
+                               inScope    = excluded.inScope,
+                               batting    = excluded.batting,
+                               pitching   = excluded.pitching,
+                               tags       = excluded.tags,
+                               categories = excluded.categories,
+                               fields     = excluded.fields
+WHERE posts.verifiedByHand = 0""", values)
 
     for ordinal, name in enumerate(parsed["names"]):
         conn.execute("""
