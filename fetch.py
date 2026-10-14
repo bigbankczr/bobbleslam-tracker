@@ -1,3 +1,4 @@
+import json
 import os
 import time
 import requests
@@ -5,7 +6,7 @@ import requests
 BASE = "https://bullpenbobbles.com/wp-json/wp/v2"
 HEADERS = {"User-Agent": "bobble-research/1.0"}
 TIMEOUT = 30
-DIRECTORY = "raw/09-15-26"
+DIRECTORY = "raw/2026-10-13"
 PERPAGE = 100
 
 def getCategoryID(slug="mlb"):
@@ -55,8 +56,9 @@ def fetchAll(categoryID, totalPages):
         filename = f"mlb_page{page:03d}.json"
         path = os.path.join(DIRECTORY, filename)
         if os.path.exists(path) and page != totalPages:
-            # may need to change at some point, doesn't detect modifications to posts not added to the end
-            continue
+            with open(path) as f:
+                if len(json.load(f)) == PERPAGE:
+                    continue
 
         params = {"categories" : categoryID,
                   "per_page" : PERPAGE,

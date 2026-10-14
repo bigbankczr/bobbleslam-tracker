@@ -11,7 +11,7 @@ FIELD_RE = re.compile(r"<strong>(.*?):</strong>(.*?)(?=<br|</p>|</div>|<strong>|
 
 
 
-DIRECTORY = "raw/09-15-26"
+DIRECTORY = "raw/2026-10-13"
 LABEL_RE = re.compile(r"<strong>(.*?):</strong>")
 HIDDEN_SPAN_RE = re.compile(r'<span style="visibility: hidden;">.*?</span>')
 
@@ -32,6 +32,8 @@ def loadPosts(directory=DIRECTORY):
     :raises json.JSONDecodeError: if a file is truncated/not in correct shape
     """
     paths = sorted(glob.glob(os.path.join(directory, "*.json")))
+    if not paths:
+        raise FileNotFoundError(f"no page files found in {directory}")
     posts = []
     for path in paths:
         with open(path) as f:
