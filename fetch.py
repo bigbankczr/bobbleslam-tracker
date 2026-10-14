@@ -1,3 +1,4 @@
+from shapes import DIRECTORY
 import json
 import os
 import time
@@ -6,7 +7,6 @@ import requests
 BASE = "https://bullpenbobbles.com/wp-json/wp/v2"
 HEADERS = {"User-Agent": "bobble-research/1.0"}
 TIMEOUT = 30
-DIRECTORY = "raw/2026-10-13"
 PERPAGE = 100
 
 def getCategoryID(slug="mlb"):
