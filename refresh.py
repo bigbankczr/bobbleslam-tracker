@@ -17,6 +17,11 @@ def stage(name):
     return time.time()
 
 def elapsed(start):
+    """
+    print seconds since start
+    :param start: from stage()
+    :return: none
+    """
     print(f"   ({time.time()-start:.0f}s)")
 
 def main():
