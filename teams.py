@@ -14,11 +14,14 @@ def createTables(conn):
     :return: none
     """
 
-    conn.executescript("""CREATE TABLE IF NOT EXISTS teams (id INTEGER NOT NULL,
-                                                            season INTEGER NOT NULL, 
-                                                            name TEXT NOT NULL, 
-                                                            teamName TEXT NOT NULL, 
-                                                            PRIMARY KEY (id, season));""")
+    conn.executescript("""CREATE TABLE IF NOT EXISTS teams
+                          (
+    id       INTEGER NOT NULL,
+    season   INTEGER NOT NULL,
+    name     TEXT    NOT NULL,
+    teamName TEXT    NOT NULL,
+    PRIMARY KEY (id, season)
+                          );""")
 
 def seasonsOnDisk(directory=TEAMS):
     """
@@ -55,21 +58,25 @@ def teamRows(seasons):
                 raise
     return rows
 
-ORPHANS = """WITH used (source, teamId, season) AS 
-                                 (SELECT 'giveawayOutcomes', o.teamId, CAST(substr(p.date, 1, 4) AS INTEGER)
-                                 FROM giveawayOutcomes o JOIN posts p ON p.id = o.postId
-                                 UNION
-                                 SELECT 'appearances', a.teamId, CAST(substr(g.date, 1, 4) AS INTEGER)
-                                 FROM appearances a JOIN games g ON g.gamePk = a.gamePk
-                                 UNION
-                                 SELECT 'games', homeTeamId, CAST(substr(date, 1, 4) AS INTEGER) FROM games
-                                 UNION
-                                 SELECT 'games', awayTeamId, CAST(substr(date, 1, 4) AS INTEGER) FROM games)
-                        SELECT u.source, u.teamId, u.season 
-                        FROM used u
-                        LEFT JOIN teams t ON t.id = u.teamId AND t.season = u.season
-                        WHERE t.id IS NULL
-                        ORDER BY u.season, u.teamId"""
+ORPHANS = """WITH used (source, teamId, season) AS
+         (SELECT 'giveawayOutcomes', o.teamId, CAST(substr(p.date, 1, 4) AS INTEGER)
+          FROM giveawayOutcomes o
+                   JOIN posts p ON p.id = o.postId
+          UNION
+          SELECT 'appearances', a.teamId, CAST(substr(g.date, 1, 4) AS INTEGER)
+          FROM appearances a
+                   JOIN games g ON g.gamePk = a.gamePk
+          UNION
+          SELECT 'games', homeTeamId, CAST(substr(date, 1, 4) AS INTEGER)
+          FROM games
+          UNION
+          SELECT 'games', awayTeamId, CAST(substr(date, 1, 4) AS INTEGER)
+          FROM games)
+SELECT u.source, u.teamId, u.season
+FROM used u
+         LEFT JOIN teams t ON t.id = u.teamId AND t.season = u.season
+WHERE t.id IS NULL
+ORDER BY u.season, u.teamId"""
 
 def storeAll(conn, seasons):
     """
