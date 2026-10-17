@@ -384,18 +384,27 @@ def handout(quantity):
         return "atGame"
     raise ValueError(f"unknown quantity {quantity!r}")
 
+def isFunRun(row):
+    """
+    whether a giveaway went to fun runners and not game attendees
+    :param row: dict from giveaways()
+    :return: (bool)
+    """
+    return row["variant"] is not None and "fun run" in row["variant"].lower()
+
 def classifyPlayerNight(numbers, giveawayTeamIds):
     """
     what an honoree did on a giveaway date, from his game logs that date.
     :param numbers: his numbers that day, from loadGameLog(). one per game, per group. doubleheaders and two-way gives
     >1
     :param giveawayTeamIds: team ids giving out bobblehead
-    :return: (dict) appeared, games (gamePks), homeRuns (hitting lines) differentTeam
+    :return: (dict) appeared, batted, games (gamePks), homeRuns (hitting lines) differentTeam
     """
     if not numbers:
-        return {"appeared": False, "games": [], "homeRuns": 0, "differentTeam": None}
+        return {"appeared": False, "batted": False, "games": [], "homeRuns": 0, "differentTeam": None}
     teams = {number["team"]["id"] for number in numbers}
     return {"appeared": True,
+            "batted": any(number["group"] == "hitting" and number["stat"]["plateAppearances"] > 0 for number in numbers),
             "games": sorted({number["game"]["gamePk"] for number in numbers}),
             "homeRuns": sum(number["stat"].get("homeRuns", 0) for number in numbers if number["group"] == "hitting"),
             "differentTeam": not (teams & giveawayTeamIds)}

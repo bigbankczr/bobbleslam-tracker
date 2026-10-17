@@ -76,12 +76,14 @@ CREATE TABLE IF NOT EXISTS playerNights
         mlbId           INTEGER NOT NULL REFERENCES players (id),
         date            TEXT NOT NULL,
         appeared        INTEGER NOT NULL CHECK (appeared IN (0, 1)),
+        batted          INTEGER NOT NULL CHECK (batted IN (0, 1)),
         logHomeRuns     INTEGER NOT NULL CHECK (logHomeRuns >= 0),
         homeRuns        INTEGER NOT NULL CHECK (homeRuns >= 0),
         unclear         INTEGER NOT NULL CHECK (unclear IN (0, 1)),
         differentTeam   INTEGER CHECK (differentTeam IN (0, 1)),
         status          TEXT NOT NULL CHECK (status IN ('hit', 'miss', 'dnp', 'otherGame')),
         PRIMARY KEY (mlbId, date),
+        CHECK (batted <= appeared), CHECK (logHomeRuns = 0 OR batted = 1),
         CHECK ((appeared = 1) = (differentTeam IS NOT NULL)),
         CHECK (homeRuns <= logHomeRuns)
 );
@@ -166,7 +168,7 @@ def nightRows(joined):
             status = "miss"
         else:
             status = "otherGame"
-        rows.append({"mlbId": mlbId, "date": day,"appeared": result["appeared"], "logHomeRuns": result["homeRuns"],
+        rows.append({"mlbId": mlbId, "date": day,"appeared": result["appeared"], "batted": result["batted"], "logHomeRuns": result["homeRuns"],
                      "homeRuns": homeRuns, "unclear": joined["eligible"][key]["unclear"], "differentTeam":
                          result["differentTeam"],"status": status})
     return rows
@@ -178,9 +180,9 @@ def insertNights(conn, nights):
     :param nights: from nightRows()
     :return: none
     """
-    conn.executemany("""INSERT INTO playerNights (mlbId, date, appeared, logHomeRuns, homeRuns, unclear, differentTeam, 
+    conn.executemany("""INSERT INTO playerNights (mlbId, date, appeared, batted, logHomeRuns, homeRuns, unclear, differentTeam, 
                                                   status)
-                        VALUES(:mlbId, :date, :appeared, :logHomeRuns, :homeRuns, :unclear, :differentTeam, :status)""", nights)
+                        VALUES(:mlbId, :date, :appeared, :batted, :logHomeRuns, :homeRuns, :unclear, :differentTeam, :status)""", nights)
 
 def storeAll(conn, joined):
     """
