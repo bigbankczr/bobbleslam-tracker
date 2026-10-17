@@ -1,4 +1,5 @@
 import time
+import export
 import homers
 import join
 import load
@@ -55,6 +56,11 @@ def main():
         teams.createTables(conn)
         teams.storeAll(conn, teams.seasonsOnDisk())
         elapsed(start)
+
+        start = stage("export")
+        export.exportAll(conn)
+        elapsed(start)
+
     finally:
         conn.close()
 
