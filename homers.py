@@ -23,8 +23,8 @@ CREATE TABLE IF NOT EXISTS giveawayOutcomes
     postId         INTEGER PRIMARY KEY REFERENCES posts (id),
     teamId         INTEGER NOT NULL,
     kind           TEXT    NOT NULL CHECK (kind IN
-                                           ('single', 'doubleheader', 'spring', 'package', 'noGame', 'preseason',
-                                            'rainout', 'afterSeason', 'upcoming', 'other')),
+                                           ('cancelled', 'single', 'doubleheader', 'spring', 'package', 'noGame', 
+                                            'preseason', 'rainout', 'afterSeason', 'upcoming', 'other')),
     handout        TEXT    NOT NULL CHECK (handout IN ('atGame', 'notAtGame', 'unclear')),
     handoutByHand  INTEGER NOT NULL CHECK (handoutByHand IN (0, 1)),
     giveawayGamePk INTEGER REFERENCES games (gamePk)

@@ -40,6 +40,7 @@ DOUBLEHEADER_GIVEAWAYS = {(114739, "2003-09-13"): 17185, # Jason Giambi game 1
     (596019, "2023-05-21"): 718099} # Lindor game 1
 # hand-checked handouts for unclear bobbles. postId -> atGame or notAtGame, keyed by post.
 HANDOUT_DECISIONS = {
+    40014: "notAtGame",   # Trevor Bauer 2020-09-19: given out at Kroger stores, no fans at game(2020)
     58538: "notAtGame",   # Hideki Matsui 2010-04-05: season-long ticket offer
     37364: "atGame",      # Altuve, Correa, Keuchel 2016-06-17: special ticket at the game
     37477: "atGame",      # A.J. Pierzynski 2016-07-15: special ticket at the game
@@ -47,7 +48,6 @@ HANDOUT_DECISIONS = {
     39298: "atGame",      # Brandon Crawford 2019-05-20: special ticket at the game
     39536: "atGame",      # Joey Gallo 2019-07-12: special ticket at the game
     40052: "atGame",      # Freeman, Albies, Acuña 2021-04-26: special ticket at the game
-    40921: "notAtGame",   # Mookie Betts 2022-08-13: fun run that fell on a game day not the game
     41062: "atGame",      # Ronald Acuña Jr. 2022-09-16: special ticket at the game
     41698: "atGame",      # Julio Rodríguez 2023-09-11: special ticket at the game
     41699: "atGame",      # Eugenio Suárez 2023-09-12: special ticket at the game
@@ -312,9 +312,14 @@ def giveaways(conn):
     """
     every post with a matched honoree, with what decides its handout
     :param conn: open connection from openDatabase()
-    :return: (list) dicts with id, team, date, quantity, mlbId, fullName, in date order, one row per honoree
+    :return: (list) dicts with id, team, date, quantity, variant, mlbId, fullName, graveyard in date order, one row per
+    honoree
     """
-    rows = conn.execute("""SELECT DISTINCT p.id, p.team, p.date, p.quantity, m.mlbId, pl.fullName
+    rows = conn.execute("""SELECT DISTINCT p.id, p.team, p.date, p.quantity, p.variant, m.mlbId, pl.fullName, 
+                               EXISTS (SELECT 1 
+                                       FROM themes th 
+                                       WHERE th.postId = p.id 
+                                         AND th.theme = 'Bobblehead Graveyard') AS graveyard
                            FROM posts p 
                                     JOIN honoreeMatches m ON m.postId = p.id 
                                     JOIN players pl ON pl.id = m.mlbId
@@ -557,10 +562,17 @@ def joinAll(conn):
         season = int(row["date"][:4])
         key = (teamIds[(row["team"], season)], season)
         nightKind, played = classifyGiveaway(scheduleIndex[key].get(row["date"], []), row["date"], today, markers[key])
-        how = HANDOUT_DECISIONS.get(row["id"], handout(row["quantity"]))
+        if row["graveyard"]:
+            nightKind, played = "cancelled", []
+        if row["id"] in HANDOUT_DECISIONS:
+            how = HANDOUT_DECISIONS[row["id"]]
+        elif isFunRun(row):
+            how = "notAtGame"
+        else:
+            how = handout(row["quantity"])
         posts[row["id"]] = {"id": row["id"], "team": row["team"], "date": row["date"], "quantity": row["quantity"],
                             "teamId": key[0], "nightKind": nightKind, "played": played, "handout": how,
-                            "kind": "package" if how == "notAtGame" else nightKind,
+                            "kind": "package" if how == "notAtGame" and nightKind != "cancelled" else nightKind,
                             "giveawayGame": (played[0]["gamePk"] if nightKind == "single" and how != "notAtGame"
                                              else None)}
     for row in rows:
@@ -651,7 +663,7 @@ def printReport(joined):
     for kind, count in Counter(post["kind"] for post in posts).most_common():
         print(f"   {kind:>14}: {count:>6,}")
     print(f"   ({sum(1 for post in posts if post['handout'] == 'unclear'):,} unclear handouts: review only if a homer)")
-    for kind in ("noGame", "rainout", "preseason", "afterSeason"):
+    for kind in ("cancelled", "noGame", "rainout", "preseason", "afterSeason"):
         print(f"\n{kind}")
         for post in posts:
             if post["kind"] == kind:
