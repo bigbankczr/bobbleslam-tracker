@@ -5,6 +5,10 @@ from shapes import loadPosts
 from parser import parsePost
 
 DATABASE = "bobbleheads.db"
+# dates the site has incorrect. postId : correct date
+DATE_CORRECTIONS = {
+    57026: "2026-06-07" # Jhoan Duran: site has 7/7, actual was 6/7
+}
 
 def createTables(conn):
     """
@@ -78,6 +82,10 @@ def insertPost(conn, parsed):
         return None if value is None else json.dumps(value, ensure_ascii=False)
 
     values = dict(parsed)
+    if parsed["id"] in DATE_CORRECTIONS:
+        if parsed["id"] == DATE_CORRECTIONS[parsed["id"]]:
+            raise ValueError(f"post {parsed['id']}: now matches correction")
+        values["date"] = DATE_CORRECTIONS[parsed["id"]]
     values["tags"] = toJson(parsed["tags"])
     values["categories"] = toJson(parsed["categories"])
     values["fields"] = toJson(parsed["fields"])
